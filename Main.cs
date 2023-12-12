@@ -26,56 +26,104 @@ namespace PipeAlign
 
         public static void CommandRun()
         {
-            List <Network> networkList = DocumentData.CurrentCivilDocument.GetNetworks(); //все сети
+            int allChekCounter = 0;
+            //int dnNotMatchPidCounter = 0;
+            List<Network> networkList = DocumentData.CurrentCivilDocument.GetNetworks(); //все сети
             if (networkList.Count == 0)
                 return;
-                    
+
             using (Transaction ts = DocumentData.CurrentDatabase.TransactionManager.StartTransaction())
             {
 
                 List<Pipe> pipeList = new List<Pipe>();
+                List<Pipe> chanelList = new List<Pipe>();
 
-                foreach (Network oNetwork in networkList)
+
+                foreach (Network network in networkList)
                 {
-                    pipeList.AddRange(oNetwork.GetPipesOfNetwork());
+                    //pipeList.AddRange(network.GetPipesOfNetwork());
 
-                    foreach (ObjectId oPipeId in oNetwork.GetPipeIds())
+                    foreach (ObjectId pipeId in network.GetPipeIds())
                     {
-                        Pipe oPipe = ts.GetObject(oPipeId, OpenMode.ForWrite, false, true) as Pipe;
-                        pipeList.Add(oPipe);
+                        Pipe pipe = ts.GetObject(pipeId, OpenMode.ForRead, false, true) as Pipe;
+
+                        string description = pipe.Description;
+                        bool containsChanelType = PipeData.ChanelType.Contains(description);
+
+
+                        if (containsChanelType == true)
+                        {
+                            chanelList.Add(pipe);
+                        }
+
+                        else
+                        {
+                            pipeList.Add(pipe);
+                        }
                     }
                 }
 
-                foreach (Pipe pipe in pipeList)
+                foreach (Pipe chanel in chanelList)
                 {
-                    string description = pipe.Description;
-                    bool containsKey = PipeData.ChanelType.ContainsKey(description);
-                    //if (pipe.Description == "В стальных футлярах и ж.б. обойме")
-                    if (containsKey == true)
+                    string description = chanel.Description;
+                    PartDataRecord chanelPDR = chanel.PartData;
+                    string chanelDN = chanelPDR.GetDataFieldBy("DN").Value.ToString();
+                    string key = description + " " + chanelDN;
+                    ObjectId chanelRefAlignmentId = chanel.RefAlignmentId;
+
+                    //bool containsChanelType = PipeData.ChanelType.Contains(description);
+                    ////bool containsKey = PipeData.ChanelType.ContainsKey(description);
+                    ////if (pipe.Description == "В стальных футлярах и ж.б. обойме")
+                    //if (containsChanelType == true)
+                    //{
+                    //foreach (Pipe otherPipe in pipeList) //Внутренний цикл
+                    //{
+                    foreach (Pipe pipe in pipeList) //Внутренний цикл
                     {
-                        foreach (Pipe otherPipe in pipeList) //Внутренний цикл
+                        //if (chanel.ObjectId != otherPipe.ObjectId) // Исключаем текущую трубу из проверки
+                        //    {
+                        //PartDataRecord pipePDR = pipe.PartData;
+                        //string pipePID = pipePDR.GetDataFieldBy("DN").Value.ToString();
+                        ObjectId pipeRefAlignmentId = pipe.RefAlignmentId;
+                        if (chanelRefAlignmentId == pipeRefAlignmentId)
                         {
-                            if (pipe.ObjectId != otherPipe.ObjectId) // Исключаем текущую трубу из проверки
+                            //string pipePID = pipe.OuterDiameterOrWidth.ToString();
+
+                            LineSegment3d lineSegment3D = new LineSegment3d(PointExts.ChangeH(pipe.StartPoint, 0),
+                                                                        PointExts.ChangeH(pipe.EndPoint, 0));
+
+                            Tolerance acrossTolerance = new Tolerance(1, 0.01);
+                            Tolerance alongTolerance = new Tolerance(0, 0.10);
+
+                            bool isOnlineStartPointAcrossTolerance = lineSegment3D.IsOn(PointExts.ChangeH(chanel.StartPoint, 0), acrossTolerance);
+                            bool isOnlineEndPointAcrossTolerance = lineSegment3D.IsOn(PointExts.ChangeH(chanel.EndPoint, 0), acrossTolerance);
+
+                            bool isOnlineStartPointAlongTolerance = lineSegment3D.IsOn(PointExts.ChangeH(chanel.StartPoint, 0), alongTolerance);
+                            bool isOnlineEndPointAlongTolerance = lineSegment3D.IsOn(PointExts.ChangeH(chanel.EndPoint, 0), alongTolerance);
+
+
+                            if ((isOnlineStartPointAcrossTolerance == true || isOnlineStartPointAlongTolerance == true) &&
+                                (isOnlineEndPointAcrossTolerance == true || isOnlineEndPointAlongTolerance == true))
                             {
-                                LineSegment3d lineSegment3D = new LineSegment3d(PointExts.ChangeH(otherPipe.StartPoint, 0),
-                                                                                PointExts.ChangeH(otherPipe.EndPoint, 0));
+                                double pipeStartPointNewZ = PointExts.GetPointZValueOnPipe(pipe, chanel.StartPoint) + PipeData.distanceBetweenAxles[key];
+                                double pipeEndPointNewZ = PointExts.GetPointZValueOnPipe(pipe, chanel.EndPoint) + PipeData.distanceBetweenAxles[key];
 
-                                Tolerance tolerance = new Tolerance(1, 0.01);
+                                chanel.UpgradeOpen();
+                                chanel.StartPoint = new Point3d(chanel.StartPoint.X, chanel.StartPoint.Y, pipeStartPointNewZ);
+                                chanel.EndPoint = new Point3d(chanel.EndPoint.X, chanel.EndPoint.Y, pipeEndPointNewZ);
+                                allChekCounter++;
+                                chanel.DowngradeOpen();
 
-                                bool isOnlineStartPoint = lineSegment3D.IsOn(PointExts.ChangeH(pipe.StartPoint, 0), tolerance);
-                                bool isOnlineEndPoint = lineSegment3D.IsOn(PointExts.ChangeH(pipe.EndPoint, 0), tolerance);
-
-                                if (isOnlineStartPoint == true && isOnlineEndPoint == true) 
-                                {
-                                    double pipeStartPointNewZ = PointExts.SetPointZValueOnPipe(otherPipe, pipe.StartPoint) + PipeData.ChanelType[description];
-                                    double pipeEndPointNewZ = PointExts.SetPointZValueOnPipe(otherPipe, pipe.StartPoint) + PipeData.ChanelType[description];
-
-                                    pipe.StartPoint = new Point3d(pipe.StartPoint.X, pipe.StartPoint.Y, pipeStartPointNewZ);
-                                    pipe.EndPoint = new Point3d(pipe.EndPoint.X, pipe.EndPoint.Y, pipeEndPointNewZ);
-                                }
-                                                               
+                                break; //если есть мэтч
                             }
+
                         }
+                        //else
+                        //{
+                        //    dnNotMatchPidCounter++;
+                        //}
+                        //}
+                        //}
                     }
                 }
 
@@ -93,7 +141,7 @@ namespace PipeAlign
             //string concatenatedItems = string.Join("\n", pipePoint);
 
             //MessageBox.Show($"5: {concatenatedItems}");
-            MessageBox.Show("DONE");
-        } 
+            MessageBox.Show($"Всего проверенно: {allChekCounter.ToString()}", "Выравнивание каналов");
+        }
     }
 }
